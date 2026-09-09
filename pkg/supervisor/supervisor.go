@@ -48,6 +48,11 @@ type Supervisor struct {
 	TimeoutRespawn time.Duration
 	// For those components having env prefix convention such as ETCD_xxx, we should keep the prefix.
 	KeepEnvPrefix bool
+	// Env holds additional "key=value" entries for the supervised process.
+	// They are appended after the inherited environment, so they take
+	// precedence. Used by components that are configured through their
+	// environment rather than through flags or a config file.
+	Env []string
 	// A function to clean some leftovers before starting or restarting the supervised process
 	CleanBeforeFn func() error
 	// Required privileges for the supervised process
@@ -245,7 +250,7 @@ func (s *Supervisor) Supervise(ctx context.Context) error {
 			} else {
 				s.cmd = exec.Command(s.BinPath, s.Args...)
 				s.cmd.Dir = s.DataDir
-				s.cmd.Env = getEnv(s.DataDir, s.Name, s.KeepEnvPrefix)
+				s.cmd.Env = append(getEnv(s.DataDir, s.Name, s.KeepEnvPrefix), s.Env...)
 				if s.Stdin != nil {
 					s.cmd.Stdin = s.Stdin()
 				}

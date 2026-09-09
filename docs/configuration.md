@@ -351,13 +351,46 @@ for node-local load balancing.
 
 Configuration options related to k0s's [control plane load balancing] feature
 
-| Element      | Description                                                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `enabled`    | Indicates if control plane load balancing should be enabled. Default: `false`.                                                 |
-| `type`       | The type of the control plane load balancer to deploy on controller nodes. Currently, the only supported type is `Keepalived`. |
-| `keepalived` | Contains the keepalived configuration.                                                                                         |
+| Element      | Description                                                                                                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`    | Indicates if control plane load balancing should be enabled. Default: `false`.                                                                    |
+| `type`       | The type of the control plane load balancer to deploy on controller nodes. Supported types are `Keepalived` and `KubeVIP`. Default: `Keepalived`. |
+| `keepalived` | Contains the keepalived configuration. Only with type `Keepalived`.                                                                               |
+| `kubeVIP`    | Contains the kube-vip configuration. Only with type `KubeVIP`.                                                                                    |
 
 [control plane load balancing]: cplb.md
+
+##### `spec.network.controlPlaneLoadBalancing.kubeVIP`
+
+Configuration options related to kube-vip in [control plane load balancing]. See
+[Using kube-vip](cplb.md#using-kube-vip); note that the kube-vip executable is not embedded in k0s and must be present
+at `<data-dir>/bin/kube-vip` or on `PATH`.
+
+| Element       | Description                                                                                                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `virtualIPs`  | The virtual IP addresses, as CIDRs. Exactly one is accepted; kube-vip serves a single address per instance.                                                                     |
+| `mode`        | How the VIP is made reachable: `ARP` answers ARP for it and requires leader election, `BGP` advertises it from every node and needs none. Default: `ARP`.                       |
+| `interface`   | The interface carrying the VIP. Defaults to the interface owning the default route in ARP mode, and to the CPLB dummy interface in BGP mode, where the address is only local.   |
+| `bgp`         | The BGP configuration. Required when `mode` is `BGP`, and must be absent otherwise.                                                                                             |
+| `healthCheck` | Whether a node withdraws its own advertisement when its local API server is unhealthy. Defaults to enabled in `BGP` mode, where it replaces leader election, disabled in `ARP`. |
+
+##### `spec.network.controlPlaneLoadBalancing.kubeVIP.bgp`
+
+| Element           | Description                                                                                                                              |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `localAS`         | This node's autonomous system number.                                                                                                    |
+| `peers`           | The BGP neighbors. Each has an `address`, an `as`, and optionally `password`, `multiHop`, `port` (default `179`) and `bfd`.              |
+| `routerID`        | The BGP router ID. Defaults to the address of `sourceInterface`, which is what makes one cluster-wide configuration valid on every node. |
+| `sourceInterface` | The interface whose address is used as the BGP source. Defaults to the interface owning the default route.                               |
+
+##### `spec.network.controlPlaneLoadBalancing.kubeVIP.healthCheck`
+
+| Element            | Description                                                                                                            |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `enabled`          | Whether the check runs. See the default above.                                                                         |
+| `periodSeconds`    | Seconds between checks. Default: `5`.                                                                                  |
+| `timeoutSeconds`   | Timeout for each check. Default: `3`.                                                                                  |
+| `failureThreshold` | Consecutive failures before the advertisement is withdrawn. Default: `3`. Period times threshold is the failover time. |
 
 ##### `spec.network.controlPlaneLoadBalancing.Keepalived`
 

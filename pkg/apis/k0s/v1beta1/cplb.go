@@ -29,23 +29,29 @@ type ControlPlaneLoadBalancingSpec struct {
 	Enabled bool `json:"enabled"`
 
 	// type indicates the type of the control plane load balancer to deploy on
-	// controller nodes. Currently, the only supported type is "Keepalived".
+	// controller nodes. Supported types are "Keepalived" and "KubeVIP".
 	// +kubebuilder:default=Keepalived
 	Type CPLBType `json:"type,omitempty"`
 
 	// Keepalived contains configuration options related to the "Keepalived" type
 	// of load balancing.
 	Keepalived *KeepalivedSpec `json:"keepalived,omitempty"`
+
+	// KubeVIP contains configuration options related to the "KubeVIP" type of
+	// load balancing.
+	KubeVIP *KubeVIPSpec `json:"kubeVIP,omitempty"`
 }
 
 // CPLBType describes which type of load balancer should be deployed for the
 // control plane load balancing. The default is [CPLBTypeKeepalived].
-// +kubebuilder:validation:Enum=Keepalived
+// +kubebuilder:validation:Enum=Keepalived;KubeVIP
 type CPLBType string
 
 const (
 	// CPLBTypeKeepalived selects Keepalived as the backing load balancer.
 	CPLBTypeKeepalived CPLBType = "Keepalived"
+	// CPLBTypeKubeVIP selects kube-vip as the backing load balancer.
+	CPLBTypeKubeVIP CPLBType = "KubeVIP"
 )
 
 type KeepalivedSpec struct {
@@ -320,6 +326,34 @@ func (k *KeepalivedSpec) validateVirtualServers() []error {
 	return errs
 }
 
+// VirtualIPs returns every virtual IP this load balancer holds, whatever the
+// backing implementation, as CIDRs.
+//
+// Callers need this to be type-agnostic: the addresses have to reach the API
+// server's serving certificate, and a VIP missing from it fails TLS
+// verification for every client that connects through the load balancer rather
+// than to a node directly.
+func (c *ControlPlaneLoadBalancingSpec) VirtualIPs() []string {
+	if c == nil || !c.Enabled {
+		return nil
+	}
+
+	var vips []string
+	switch c.Type {
+	case CPLBTypeKubeVIP:
+		if c.KubeVIP != nil {
+			vips = append(vips, c.KubeVIP.VirtualIPs...)
+		}
+	default:
+		if c.Keepalived != nil {
+			for _, i := range c.Keepalived.VRRPInstances {
+				vips = append(vips, i.VirtualIPs...)
+			}
+		}
+	}
+	return vips
+}
+
 // Validate validates the ControlPlaneLoadBalancingSpec
 func (c *ControlPlaneLoadBalancingSpec) Validate() (errs []error) {
 	if c == nil {
@@ -328,13 +362,25 @@ func (c *ControlPlaneLoadBalancingSpec) Validate() (errs []error) {
 
 	switch c.Type {
 	case CPLBTypeKeepalived:
+		if c.KubeVIP != nil {
+			errs = append(errs, fmt.Errorf("kubeVIP must not be defined when type is %s", CPLBTypeKeepalived))
+		}
+		return append(errs, c.Keepalived.Validate()...)
+	case CPLBTypeKubeVIP:
+		if c.Keepalived != nil {
+			errs = append(errs, fmt.Errorf("keepalived must not be defined when type is %s", CPLBTypeKubeVIP))
+		}
+		if c.KubeVIP == nil {
+			errs = append(errs, fmt.Errorf("kubeVIP must be defined when type is %s", CPLBTypeKubeVIP))
+			return errs
+		}
+		return append(errs, c.KubeVIP.Validate()...)
 	case "":
 		c.Type = CPLBTypeKeepalived
+		return append(errs, c.Keepalived.Validate()...)
 	default:
-		errs = append(errs, fmt.Errorf("unsupported CPLB type: %s. Only allowed value: %s", c.Type, CPLBTypeKeepalived))
+		return append(errs, fmt.Errorf("unsupported CPLB type: %s. Allowed values: %s, %s", c.Type, CPLBTypeKeepalived, CPLBTypeKubeVIP))
 	}
-
-	return append(errs, c.Keepalived.Validate()...)
 }
 
 // Validate validates the KeepalivedSpec

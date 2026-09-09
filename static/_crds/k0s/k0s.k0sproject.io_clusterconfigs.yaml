@@ -874,13 +874,182 @@ spec:
                             maxItems: 255
                             type: array
                         type: object
+                      kubeVIP:
+                        description: |-
+                          KubeVIP contains configuration options related to the "KubeVIP" type of
+                          load balancing.
+                        properties:
+                          bgp:
+                            description: BGP holds the BGP configuration. Required
+                              when Mode is BGP.
+                            properties:
+                              localAS:
+                                description: LocalAS is this node's autonomous system
+                                  number.
+                                format: int32
+                                minimum: 1
+                                type: integer
+                              peers:
+                                description: Peers is the list of BGP neighbors.
+                                items:
+                                  description: KubeVIPBGPPeer is a single BGP neighbor.
+                                  properties:
+                                    address:
+                                      description: Address of the peer.
+                                      type: string
+                                    as:
+                                      description: AS is the peer's autonomous system
+                                        number.
+                                      format: int32
+                                      minimum: 1
+                                      type: integer
+                                    bfd:
+                                      description: |-
+                                        BFD enables Bidirectional Forwarding Detection for this peer, so that a
+                                        dead speaker is noticed in well under a BGP hold time.
+                                      properties:
+                                        detectMultiplier:
+                                          default: 3
+                                          description: DetectMultiplier is the detection
+                                            multiplier. Defaults to 3.
+                                          format: int32
+                                          minimum: 1
+                                          type: integer
+                                        receiveIntervalMillis:
+                                          default: 300
+                                          description: ReceiveIntervalMillis is the
+                                            minimum receive interval. Defaults to
+                                            300.
+                                          format: int32
+                                          minimum: 1
+                                          type: integer
+                                        transmitIntervalMillis:
+                                          default: 300
+                                          description: TransmitIntervalMillis is the
+                                            desired transmit interval. Defaults to
+                                            300.
+                                          format: int32
+                                          minimum: 1
+                                          type: integer
+                                      type: object
+                                    multiHop:
+                                      description: MultiHop allows the peer to be
+                                        more than one hop away.
+                                      type: boolean
+                                    password:
+                                      description: Password enables MD5 authentication
+                                        with the peer.
+                                      type: string
+                                    port:
+                                      default: 179
+                                      description: Port of the peer. Defaults to 179.
+                                      maximum: 65535
+                                      minimum: 1
+                                      type: integer
+                                  required:
+                                  - address
+                                  - as
+                                  type: object
+                                minItems: 1
+                                type: array
+                              routerID:
+                                description: |-
+                                  RouterID is the BGP router ID. If not specified, k0s derives it from the
+                                  address of SourceInterface, which is what makes a single cluster-wide
+                                  config usable on every node.
+                                type: string
+                              sourceInterface:
+                                description: |-
+                                  SourceInterface is the interface whose address is used as the BGP source
+                                  and, unless RouterID is set, as the router ID. Defaults to the interface
+                                  owning the default route.
+                                type: string
+                            required:
+                            - localAS
+                            - peers
+                            type: object
+                          healthCheck:
+                            description: |-
+                              HealthCheck controls whether a node withdraws its own advertisement when
+                              its local API server stops being healthy. This is what replaces leader
+                              election in BGP mode.
+                            properties:
+                              enabled:
+                                description: |-
+                                  Enabled turns the health check on. Defaults to true in BGP mode, where
+                                  it is the only failure detection there is, and false in ARP mode, where
+                                  leader election covers it.
+                                type: boolean
+                              failureThreshold:
+                                default: 3
+                                description: |-
+                                  FailureThreshold is the number of consecutive failures before the
+                                  advertisement is withdrawn. Defaults to 3.
+                                format: int32
+                                minimum: 1
+                                type: integer
+                              periodSeconds:
+                                default: 5
+                                description: PeriodSeconds between checks. Defaults
+                                  to 5.
+                                format: int32
+                                minimum: 1
+                                type: integer
+                              timeoutSeconds:
+                                default: 3
+                                description: TimeoutSeconds for each check. Defaults
+                                  to 3.
+                                format: int32
+                                minimum: 1
+                                type: integer
+                            type: object
+                          interface:
+                            description: |-
+                              Interface is the NIC that carries the VIP. If not specified, k0s uses
+                              the interface that owns the default route in ARP mode, and the CPLB
+                              dummy interface in BGP mode, where the address only has to exist
+                              locally. See the note on dummyvip0 in the component for why that
+                              default matters.
+                            type: string
+                          mode:
+                            default: ARP
+                            description: |-
+                              Mode selects how the virtual IP is made reachable.
+                              ARP answers ARP requests for the VIP on Interface, and requires leader
+                              election so that exactly one node answers.
+                              BGP advertises the VIP from every node and lets the upstream router
+                              balance across them, and needs no leader election.
+                            enum:
+                            - ARP
+                            - BGP
+                            type: string
+                          virtualIPs:
+                            description: |-
+                              VirtualIPs is the list of virtual IP addresses managed by kube-vip.
+                              Each entry is a CIDR, e.g. 192.168.0.100/32.
+
+                              Exactly one is accepted today. kube-vip takes a single address per
+                              manager instance, so a second entry could only be honoured by running a
+                              second instance, and silently serving just the first would leave the
+                              others in the API server certificate but unreachable. The field is a
+                              list to match KeepalivedSpec and to leave room to lift this.
+                            items:
+                              type: string
+                            maxItems: 1
+                            minItems: 1
+                            type: array
+                            x-kubernetes-list-type: set
+                        required:
+                        - virtualIPs
+                        type: object
                       type:
                         default: Keepalived
                         description: |-
                           type indicates the type of the control plane load balancer to deploy on
-                          controller nodes. Currently, the only supported type is "Keepalived".
+                          controller nodes. Supported types are "Keepalived" and "KubeVIP".
                         enum:
                         - Keepalived
+                        - KubeVIP
                         type: string
                     type: object
                   coreDNS:

@@ -250,18 +250,16 @@ func (c *Certificates) generateSANList(ctx context.Context) ([]string, error) {
 		hostnames = append(hostnames, localIPs...)
 	}
 
-	// Add to SANs the IPs from the control plane load balancer
-	cplb := c.ClusterSpec.Network.ControlPlaneLoadBalancing
-	if cplb != nil && cplb.Enabled && cplb.Keepalived != nil {
-		for _, v := range cplb.Keepalived.VRRPInstances {
-			for _, vip := range v.VirtualIPs {
-				ip, _, err := net.ParseCIDR(vip)
-				if err != nil {
-					return nil, fmt.Errorf("error parsing virtualIP %s: %w", vip, err)
-				}
-				hostnames = append(hostnames, ip.String())
-			}
+	// Add to SANs the IPs from the control plane load balancer, whichever
+	// implementation is backing it. A VIP that is missing here is served a
+	// certificate that does not cover it, and every client that connects
+	// through the load balancer fails verification.
+	for _, vip := range c.ClusterSpec.Network.ControlPlaneLoadBalancing.VirtualIPs() {
+		ip, _, err := net.ParseCIDR(vip)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing virtualIP %s: %w", vip, err)
 		}
+		hostnames = append(hostnames, ip.String())
 	}
 
 	internalAPIAddress, err := c.ClusterSpec.Network.InternalAPIAddresses()

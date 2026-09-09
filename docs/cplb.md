@@ -15,10 +15,14 @@ recommended to use both together if you don't have an external load balancer.
 Load balancing means that an IP address will forward the traffic to every control plane node, Virtual IPs mean that
 this IP address will be present on at least one node at a time.
 
-CPLB relies on [keepalived](https://www.keepalived.org) for highly available VIPs. Internally, Keepalived uses the
-[VRRP protocol](https://datatracker.ietf.org/doc/html/rfc3768). Load Balancing can be done through either userspace
-reverse proxy implemented in k0s (recommended for simplicity), or it can use Keepalived's virtual servers feature,
-which ultimately relies on IPVS.
+CPLB has two implementations, selected with `spec.network.controlPlaneLoadBalancing.type`:
+
+* **`Keepalived`** (the default) relies on [keepalived](https://www.keepalived.org) for highly available VIPs.
+  Internally, Keepalived uses the [VRRP protocol](https://datatracker.ietf.org/doc/html/rfc3768). Load Balancing can be
+  done through either the userspace reverse proxy implemented in k0s (recommended for simplicity), or Keepalived's
+  virtual servers feature, which ultimately relies on IPVS.
+* **`KubeVIP`** runs [kube-vip](https://kube-vip.io) instead, which can hold the VIP either by answering ARP for it or
+  by advertising it over BGP. See [Using kube-vip](#using-kube-vip).
 
 ## Compatibility
 
@@ -30,7 +34,8 @@ CPLB is incompatible with running as a [single node](k0s-single-node.md). This m
 
 ### Controller + worker
 
-K0s only supports the userspace reverse proxy load balancer. Keepalived's VirtualServers are not supported with controller + worker.
+With the `Keepalived` type, k0s only supports the userspace reverse proxy load balancer; Keepalived's VirtualServers
+are not supported with controller + worker. The `KubeVIP` type provides the VIP only and is unaffected by this.
 
 Both Kube-Router and Calico managed by k0s are supported with the userspace reverse proxy load balancer, however, k0s creates iptables
 rules in the control plane nodes which may be incompatible with custom CNI plugins.
@@ -143,6 +148,111 @@ The prefix always uses netmask 128.
 K0s doesn't attempt to modify labels that do not belong to the VIP.
 
 [RFC 6724]: https://datatracker.ietf.org/doc/html/rfc6724
+
+## Using kube-vip
+
+Set the CPLB type to `KubeVIP` to hold the VIP with [kube-vip](https://kube-vip.io) rather than keepalived. k0s
+supervises it as a plain process, exactly as it does keepalived, so the VIP is up before kube-apiserver is.
+
+The kube-vip executable is **not embedded in k0s**. Place it at `<data-dir>/bin/kube-vip` or somewhere on `PATH`
+before starting k0s; `k0s` will not download it.
+
+### ARP mode
+
+The VIP is held by whichever node answers ARP for it, so exactly one node may hold it at a time and leader election is
+mandatory. This is the closest equivalent to the keepalived behaviour, and the VIP must be on the same subnet as the
+nodes.
+
+```yaml
+spec:
+  network:
+    controlPlaneLoadBalancing:
+      enabled: true
+      type: KubeVIP
+      kubeVIP:
+        mode: ARP
+        virtualIPs:
+          - 192.168.1.100/24
+        # interface defaults to the one owning the default route
+        interface: eth0
+```
+
+### BGP mode
+
+Every node advertises the same address to an upstream router, which balances across them. There is no leader election
+and therefore no dependency on a writable API server for failover, which is the main reason to choose this mode. The
+VIP does not have to be on the node subnet, because it is routed rather than resolved.
+
+```yaml
+spec:
+  network:
+    controlPlaneLoadBalancing:
+      enabled: true
+      type: KubeVIP
+      kubeVIP:
+        mode: BGP
+        virtualIPs:
+          - 10.44.100.10/32
+        bgp:
+          localAS: 65001
+          # routerID and sourceInterface default sensibly: the router ID is
+          # derived from the source interface's address, which is what lets one
+          # cluster-wide configuration be correct on every node.
+          sourceInterface: eth0
+          peers:
+            - address: 10.44.0.1
+              as: 65000
+              bfd:
+                receiveIntervalMillis: 300
+                transmitIntervalMillis: 300
+                detectMultiplier: 3
+```
+
+In BGP mode the VIP only has to exist locally, so k0s places it on the CPLB dummy interface (`dummyvip0`) rather than
+on a real NIC. That is deliberate: k0s skips that interface when detecting its own node address, so the VIP can never
+be mistaken for it.
+
+The upstream router must accept a session from every control plane node **and install multipath routes**. Without
+multipath you get one working next hop rather than N, and a failover test that proves nothing.
+
+### Failover in BGP mode
+
+With no leader election, what removes an unhealthy node is `healthCheck`: each node polls its own API server and
+withdraws its advertisement when the poll fails `failureThreshold` times in a row. It is enabled by default in BGP mode
+and disabled in ARP mode, where the lease covers it.
+
+Two consequences are worth planning for:
+
+* **The health check interval is the failover time.** Killing the API server does not necessarily stop kube-vip, so BFD
+  may never fire and the session may stay up; what removes the node is the withdrawal. With the defaults
+  (`periodSeconds: 5`, `failureThreshold: 3`) that is up to 15 seconds. Lower them if that is too long, bearing in mind
+  that an aggressive check will withdraw on a transient stall, and that with no leader election all nodes can withdraw
+  at once.
+* **The check is unauthenticated.** kube-vip issues a plain `GET /readyz`, and k0s runs kube-apiserver with
+  `--anonymous-auth=false`, so the check is rejected with HTTP 401 and **nothing is ever advertised**. Grant anonymous
+  access to that one path with an
+  [AuthenticationConfiguration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration):
+
+  ```yaml
+  apiVersion: apiserver.config.k8s.io/v1
+  kind: AuthenticationConfiguration
+  anonymous:
+    enabled: true
+    conditions:
+      - path: /readyz
+  ```
+
+  referenced from `spec.api.extraArgs.authentication-config`. k0s drops its own `--anonymous-auth` default when the
+  file declares an `anonymous` section, so nothing else is needed. The file holds policy rather than credentials and
+  must be readable by the API server's user, so `0644` rather than `0600`.
+
+### Limitations
+
+* Exactly one virtual IP is accepted. kube-vip serves a single address per manager instance, so additional entries are
+  rejected at validation rather than silently ignored.
+* kube-vip handles the control plane VIP only. It is not wired up to announce `type: LoadBalancer` service addresses
+  here; use a service load balancer such as MetalLB for that, and note that two BGP speakers on one node peering to the
+  same router from the same source address will displace each other's session.
 
 ## Load Balancing
 

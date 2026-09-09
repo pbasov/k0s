@@ -306,14 +306,24 @@ func (c *command) start(ctx context.Context, runtimeConfig *config.RuntimeConfig
 			BinDir:       c.K0sVars.BinDir,
 		})
 
-		nodeComponents.Add(ctx, &cplb.Keepalived{
-			K0sVars:         c.K0sVars,
-			Config:          cplbCfg.Keepalived,
-			DetailedLogging: debug,
-			LogConfig:       debug,
-			KubeConfigPath:  c.K0sVars.AdminKubeConfigPath,
-			APIPort:         nodeConfig.Spec.API.Port,
-		})
+		switch cplbCfg.Type {
+		case v1beta1.CPLBTypeKubeVIP:
+			nodeComponents.Add(ctx, &cplb.KubeVIP{
+				K0sVars:        c.K0sVars,
+				Config:         cplbCfg.KubeVIP,
+				KubeConfigPath: c.K0sVars.AdminKubeConfigPath,
+				APIPort:        nodeConfig.Spec.API.Port,
+			})
+		default:
+			nodeComponents.Add(ctx, &cplb.Keepalived{
+				K0sVars:         c.K0sVars,
+				Config:          cplbCfg.Keepalived,
+				DetailedLogging: debug,
+				LogConfig:       debug,
+				KubeConfigPath:  c.K0sVars.AdminKubeConfigPath,
+				APIPort:         nodeConfig.Spec.API.Port,
+			})
+		}
 	}
 
 	enableKonnectivity := controllerMode != config.SingleNodeMode && !slices.Contains(flags.DisableComponents, constant.KonnectivityServerComponentName)
